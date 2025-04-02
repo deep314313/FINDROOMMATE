@@ -1,8 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import axios from 'axios';
+import { useAuth } from '../context/AuthContext';
 
 const Home = () => {
+  const { user: currentUser, loading } = useAuth();
   const [filters, setFilters] = useState({
     location: '',
     collegeName: '',
@@ -13,96 +15,233 @@ const Home = () => {
     pgName: ''
   });
   const [posts, setPosts] = useState([]);
-  const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [currentUser, setCurrentUser] = useState(null);
   const navigate = useNavigate();
+  
+  // Pagination states
+  const [page, setPage] = useState(1);
+  const [hasMore, setHasMore] = useState(true);
+  const [isLoading, setIsLoading] = useState(false);
+  const ITEMS_PER_PAGE = 9; // Number of items to fetch per page (3x3 grid)
 
+  // Cache state
+  const [cache, setCache] = useState({});
+  const [cacheTimestamp, setCacheTimestamp] = useState({});
+  const CACHE_EXPIRY = 5 * 60 * 1000; // 5 minutes in milliseconds
+
+  // Debounce filter changes to prevent excessive API calls
+  const [debouncedFilters, setDebouncedFilters] = useState(filters);
+  
+  // Load cache from localStorage on component mount
   useEffect(() => {
-    fetchCurrentUser();
+    try {
+      const savedCache = localStorage.getItem('postsCache');
+      const savedTimestamp = localStorage.getItem('postsCacheTimestamp');
+      
+      if (savedCache && savedTimestamp) {
+        setCache(JSON.parse(savedCache));
+        setCacheTimestamp(JSON.parse(savedTimestamp));
+      }
+    } catch (error) {
+      console.error("Error loading cache from localStorage:", error);
+      // If there's an error, clear the cache
+      localStorage.removeItem('postsCache');
+      localStorage.removeItem('postsCacheTimestamp');
+    }
   }, []);
 
+  // Save cache to localStorage when it changes
   useEffect(() => {
-    if (currentUser?.isProfileComplete) {
+    if (Object.keys(cache).length > 0) {
+      try {
+        localStorage.setItem('postsCache', JSON.stringify(cache));
+        localStorage.setItem('postsCacheTimestamp', JSON.stringify(cacheTimestamp));
+      } catch (error) {
+        console.error("Error saving cache to localStorage:", error);
+      }
+    }
+  }, [cache, cacheTimestamp]);
+
+  useEffect(() => {
+    const handler = setTimeout(() => {
+      setDebouncedFilters(filters);
+    }, 500); // 500ms delay
+    
+    return () => {
+      clearTimeout(handler);
+    };
+  }, [filters]);
+
+  // Reset pagination when filters change
+  useEffect(() => {
+    setPosts([]);
+    setPage(1);
+    setHasMore(true);
+  }, [debouncedFilters]);
+
+  useEffect(() => {
+    if (currentUser?.isProfileComplete && hasMore) {
       fetchPosts();
     }
-  }, [filters, currentUser]);
+  }, [page, debouncedFilters, currentUser]);
 
-  const fetchCurrentUser = async () => {
-    try {
-      const token = localStorage.getItem('token');
-      const response = await axios.get(`${import.meta.env.VITE_API_URL}/api/profile`, {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      });
-      setCurrentUser(response.data);
-    } catch (error) {
-      setError('Failed to load profile');
-    }
+  // Generate a unique cache key based on filters and page
+  const getCacheKey = (filters, pageNum) => {
+    return JSON.stringify({...filters, page: pageNum});
+  };
+
+  // Check if cached data is still valid
+  const isCacheValid = (key) => {
+    const timestamp = cacheTimestamp[key];
+    if (!timestamp) return false;
+    
+    const now = Date.now();
+    return (now - timestamp) < CACHE_EXPIRY;
   };
 
   const fetchPosts = async () => {
+    if (isLoading) return;
+    
+    // Generate cache key for current request
+    const cacheKey = getCacheKey(debouncedFilters, page);
+    
+    // Check if we have valid cached data
+    if (cache[cacheKey] && isCacheValid(cacheKey)) {
+      console.log("Using cached data for page", page);
+      const cachedData = cache[cacheKey];
+      
+      if (page === 1) {
+        setPosts(cachedData);
+      } else {
+        setPosts(prevPosts => [...prevPosts, ...cachedData]);
+      }
+      
+      setHasMore(cachedData.length === ITEMS_PER_PAGE);
+      return;
+    }
+    
     try {
-      setLoading(true);
+      setIsLoading(true);
       setError(null);
       const token = localStorage.getItem('token');
       const response = await axios.get(`${import.meta.env.VITE_API_URL}/api/profile/search`, {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        },
-        params: filters
+        headers: { Authorization: `Bearer ${token}` },
+        params: {
+          ...debouncedFilters,
+          page,
+          limit: ITEMS_PER_PAGE
+        }
       });
-      setPosts(response.data);
+      
+      const newPosts = response.data.posts || response.data;
+      
+      if (Array.isArray(newPosts)) {
+        // Cache the response
+        setCache(prevCache => ({
+          ...prevCache,
+          [cacheKey]: newPosts
+        }));
+        
+        // Update cache timestamp
+        setCacheTimestamp(prevTimestamps => ({
+          ...prevTimestamps,
+          [cacheKey]: Date.now()
+        }));
+        
+        if (page === 1) {
+          setPosts(newPosts);
+        } else {
+          setPosts(prevPosts => [...prevPosts, ...newPosts]);
+        }
+        
+        // Check if we've received fewer items than requested, which means we've reached the end
+        setHasMore(newPosts.length === ITEMS_PER_PAGE);
+      } else {
+        console.error("Expected array of posts but got:", newPosts);
+        setError('Invalid response format');
+      }
     } catch (error) {
+      console.error("Error fetching posts:", error);
       setError('Failed to load posts');
     } finally {
-      setLoading(false);
+      setIsLoading(false);
     }
   };
 
+  // Function to clear cache
+  const clearCache = useCallback(() => {
+    setCache({});
+    setCacheTimestamp({});
+    localStorage.removeItem('postsCache');
+    localStorage.removeItem('postsCacheTimestamp');
+    console.log("Cache cleared");
+  }, []);
+
   const handleFilterChange = (e) => {
-    setFilters({
-      ...filters,
-      [e.target.name]: e.target.value
-    });
+    setFilters({ ...filters, [e.target.name]: e.target.value });
   };
 
   const handleUserClick = (userId) => {
-    // Don't navigate if clicking on own profile
-    if (userId === currentUser?._id) {
-      return;
+    if (userId !== currentUser?._id) {
+      navigate(`/user/${userId}`);
     }
-    navigate(`/user/${userId}`);
   };
+
+  const loadMore = () => {
+    if (!isLoading && hasMore) {
+      setPage(prevPage => prevPage + 1);
+    }
+  };
+
+  // Force refresh data (bypassing cache)
+  const refreshData = () => {
+    // Clear only the cache for current filter set
+    const keysToRemove = Object.keys(cache).filter(key => {
+      try {
+        const keyObj = JSON.parse(key);
+        const filterKeys = Object.keys(debouncedFilters);
+        return filterKeys.every(filterKey => 
+          keyObj[filterKey] === debouncedFilters[filterKey]
+        );
+      } catch {
+        return false;
+      }
+    });
+    
+    // Remove matching keys from cache
+    const newCache = {...cache};
+    const newTimestamps = {...cacheTimestamp};
+    keysToRemove.forEach(key => {
+      delete newCache[key];
+      delete newTimestamps[key];
+    });
+    
+    setCache(newCache);
+    setCacheTimestamp(newTimestamps);
+    
+    // Reset pagination and fetch fresh data
+    setPosts([]);
+    setPage(1);
+    setHasMore(true);
+  };
+
+  if (loading) {
+    return <div className="min-h-screen flex items-center justify-center">Loading...</div>;
+  }
 
   if (!currentUser?.isProfileComplete) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center px-4">
         <div className="max-w-md w-full text-center">
           <div className="bg-white rounded-lg shadow-md p-8">
-            <svg
-              className="mx-auto h-12 w-12 text-gray-400"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-              xmlns="http://www.w3.org/2000/svg"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth="2"
-                d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"
-              />
+            <svg className="mx-auto h-12 w-12 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
             </svg>
             <h2 className="mt-4 text-xl font-bold text-gray-900">Complete Your Profile</h2>
             <p className="mt-2 text-gray-600">
               Please complete your profile to view and connect with potential roommates.
             </p>
-            <Link
-              to="/edit-profile"
-              className="mt-6 inline-block px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-black hover:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-black"
-            >
+            <Link to="/edit-profile" className="mt-6 inline-block px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-black hover:bg-gray-800">
               Complete Profile
             </Link>
           </div>
@@ -110,6 +249,8 @@ const Home = () => {
       </div>
     );
   }
+;
+
 
   return (
     <div className="min-h-screen bg-gray-50 pt-10">
