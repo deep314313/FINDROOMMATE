@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { useAuth } from '../context/AuthContext';
@@ -24,101 +24,21 @@ const Home = () => {
   const [isLoading, setIsLoading] = useState(false);
   const ITEMS_PER_PAGE = 9; // Number of items to fetch per page (3x3 grid)
 
-  // Cache state
-  const [cache, setCache] = useState({});
-  const [cacheTimestamp, setCacheTimestamp] = useState({});
-  const CACHE_EXPIRY = 5 * 60 * 1000; // 5 minutes in milliseconds
-
-  // Debounce filter changes to prevent excessive API calls
-  const [debouncedFilters, setDebouncedFilters] = useState(filters);
-  
-  // Load cache from localStorage on component mount
-  useEffect(() => {
-    try {
-      const savedCache = localStorage.getItem('postsCache');
-      const savedTimestamp = localStorage.getItem('postsCacheTimestamp');
-      
-      if (savedCache && savedTimestamp) {
-        setCache(JSON.parse(savedCache));
-        setCacheTimestamp(JSON.parse(savedTimestamp));
-      }
-    } catch (error) {
-      console.error("Error loading cache from localStorage:", error);
-      // If there's an error, clear the cache
-      localStorage.removeItem('postsCache');
-      localStorage.removeItem('postsCacheTimestamp');
-    }
-  }, []);
-
-  // Save cache to localStorage when it changes
-  useEffect(() => {
-    if (Object.keys(cache).length > 0) {
-      try {
-        localStorage.setItem('postsCache', JSON.stringify(cache));
-        localStorage.setItem('postsCacheTimestamp', JSON.stringify(cacheTimestamp));
-      } catch (error) {
-        console.error("Error saving cache to localStorage:", error);
-      }
-    }
-  }, [cache, cacheTimestamp]);
-
-  useEffect(() => {
-    const handler = setTimeout(() => {
-      setDebouncedFilters(filters);
-    }, 500); // 500ms delay
-    
-    return () => {
-      clearTimeout(handler);
-    };
-  }, [filters]);
-
-  // Reset pagination when filters change
   useEffect(() => {
     setPosts([]);
     setPage(1);
     setHasMore(true);
-  }, [debouncedFilters]);
+    fetchPosts();
+  }, [filters]);
 
   useEffect(() => {
     if (currentUser?.isProfileComplete && hasMore) {
       fetchPosts();
     }
-  }, [page, debouncedFilters, currentUser]);
-
-  // Generate a unique cache key based on filters and page
-  const getCacheKey = (filters, pageNum) => {
-    return JSON.stringify({...filters, page: pageNum});
-  };
-
-  // Check if cached data is still valid
-  const isCacheValid = (key) => {
-    const timestamp = cacheTimestamp[key];
-    if (!timestamp) return false;
-    
-    const now = Date.now();
-    return (now - timestamp) < CACHE_EXPIRY;
-  };
+  }, [page, currentUser]);
 
   const fetchPosts = async () => {
     if (isLoading) return;
-    
-    // Generate cache key for current request
-    const cacheKey = getCacheKey(debouncedFilters, page);
-    
-    // Check if we have valid cached data
-    if (cache[cacheKey] && isCacheValid(cacheKey)) {
-      console.log("Using cached data for page", page);
-      const cachedData = cache[cacheKey];
-      
-      if (page === 1) {
-        setPosts(cachedData);
-      } else {
-        setPosts(prevPosts => [...prevPosts, ...cachedData]);
-      }
-      
-      setHasMore(cachedData.length === ITEMS_PER_PAGE);
-      return;
-    }
     
     try {
       setIsLoading(true);
@@ -127,7 +47,14 @@ const Home = () => {
       const response = await axios.get(`${import.meta.env.VITE_API_URL}/api/profile/search`, {
         headers: { Authorization: `Bearer ${token}` },
         params: {
-          ...debouncedFilters,
+          ...filters,
+          location: filters.location.toLowerCase(),
+          gender: filters.gender.toLowerCase(),
+          branch: filters.branch.toLowerCase(),
+          course: filters.course.toLowerCase(),
+          pgName: filters.pgName.toLowerCase(),
+          collegeName: filters.collegeName.toLowerCase(),
+           // Make location case-insensitive
           page,
           limit: ITEMS_PER_PAGE
         }
@@ -136,18 +63,6 @@ const Home = () => {
       const newPosts = response.data.posts || response.data;
       
       if (Array.isArray(newPosts)) {
-        // Cache the response
-        setCache(prevCache => ({
-          ...prevCache,
-          [cacheKey]: newPosts
-        }));
-        
-        // Update cache timestamp
-        setCacheTimestamp(prevTimestamps => ({
-          ...prevTimestamps,
-          [cacheKey]: Date.now()
-        }));
-        
         if (page === 1) {
           setPosts(newPosts);
         } else {
@@ -167,16 +82,6 @@ const Home = () => {
       setIsLoading(false);
     }
   };
-
-  // Function to clear cache
-  const clearCache = useCallback(() => {
-    setCache({});
-    setCacheTimestamp({});
-    localStorage.removeItem('postsCache');
-    localStorage.removeItem('postsCacheTimestamp');
-    console.log("Cache cleared");
-  }, []);
-
   const handleFilterChange = (e) => {
     setFilters({ ...filters, [e.target.name]: e.target.value });
   };
@@ -187,43 +92,6 @@ const Home = () => {
     }
   };
 
-  const loadMore = () => {
-    if (!isLoading && hasMore) {
-      setPage(prevPage => prevPage + 1);
-    }
-  };
-
-  // Force refresh data (bypassing cache)
-  const refreshData = () => {
-    // Clear only the cache for current filter set
-    const keysToRemove = Object.keys(cache).filter(key => {
-      try {
-        const keyObj = JSON.parse(key);
-        const filterKeys = Object.keys(debouncedFilters);
-        return filterKeys.every(filterKey => 
-          keyObj[filterKey] === debouncedFilters[filterKey]
-        );
-      } catch {
-        return false;
-      }
-    });
-    
-    // Remove matching keys from cache
-    const newCache = {...cache};
-    const newTimestamps = {...cacheTimestamp};
-    keysToRemove.forEach(key => {
-      delete newCache[key];
-      delete newTimestamps[key];
-    });
-    
-    setCache(newCache);
-    setCacheTimestamp(newTimestamps);
-    
-    // Reset pagination and fetch fresh data
-    setPosts([]);
-    setPage(1);
-    setHasMore(true);
-  };
 
   if (loading) {
     return <div className="min-h-screen flex items-center justify-center">Loading...</div>;
