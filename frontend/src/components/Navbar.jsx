@@ -102,8 +102,15 @@ const Navbar = () => {
             >
               Home
             </Link>
+            <Link
+                  to="/search"
+                  className="block px-3 py-2 rounded-md hover:bg-gray-800 transition-colors duration-200"
+                >
+                  Search
+                </Link>
             {user ? (
               <>
+                
                 <Link
                   to="/messages"
                   className="block px-3 py-2 rounded-md hover:bg-gray-800 transition-colors duration-200"
