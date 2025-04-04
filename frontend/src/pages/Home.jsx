@@ -40,6 +40,8 @@ const Home = () => {
   const fetchPosts = async () => {
     if (isLoading) return;
     
+    console.log(`Fetching posts for page: ${page}`); // Check which page is being requested
+  
     try {
       setIsLoading(true);
       setError(null);
@@ -48,28 +50,23 @@ const Home = () => {
         headers: { Authorization: `Bearer ${token}` },
         params: {
           ...filters,
-          location: filters.location.toLowerCase(),
+          location: filters.location.toLowerCase(), 
           gender: filters.gender.toLowerCase(),
-          branch: filters.branch.toLowerCase(),
-          course: filters.course.toLowerCase(),
-          pgName: filters.pgName.toLowerCase(),
-          collegeName: filters.collegeName.toLowerCase(),
-           // Make location case-insensitive
           page,
           limit: ITEMS_PER_PAGE
         }
       });
-      
+  
       const newPosts = response.data.posts || response.data;
       
       if (Array.isArray(newPosts)) {
+        console.log(`Received ${newPosts.length} posts for page: ${page}`); // Check how many posts are returned
         if (page === 1) {
           setPosts(newPosts);
         } else {
           setPosts(prevPosts => [...prevPosts, ...newPosts]);
         }
         
-        // Check if we've received fewer items than requested, which means we've reached the end
         setHasMore(newPosts.length === ITEMS_PER_PAGE);
       } else {
         console.error("Expected array of posts but got:", newPosts);
@@ -82,6 +79,7 @@ const Home = () => {
       setIsLoading(false);
     }
   };
+  
   const handleFilterChange = (e) => {
     setFilters({ ...filters, [e.target.name]: e.target.value });
   };

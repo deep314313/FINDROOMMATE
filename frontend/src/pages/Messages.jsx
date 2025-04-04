@@ -12,7 +12,7 @@ const Messages = () => {
   const scrollRef = useRef();
 
   useEffect(() => {
-    socket.current = io('http://localhost:5000');
+    socket.current = io('https://findroommate.onrender.com');
     socket.current.on('getMessage', (data) => {
       setArrivalMessage({
         sender: data.senderId,
